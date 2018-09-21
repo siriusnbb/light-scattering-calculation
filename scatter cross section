@@ -1,0 +1,156 @@
+from pylab import *
+from scipy import special
+from scipy import interpolate
+import matplotlib.pyplot as plt
+import math
+
+# CALCULATION PARAMETERS
+# name of result pickle file
+
+# materials definition
+mat = 'Au' # definition of the material gold='Au', silver='Ag'
+n_medium = 1.33 # water
+# list of diameters to be calculated
+# in meters
+list_diam=arange(1000,8500,50)*1e-9
+# spectra specifications
+specstart = 400e-9 # wavelengths in meters
+specend = 1000e-9
+Npts_spectrum = 500# number of points in a spectrum
+# FUNCTION DEFINITIONS
+# definition of Mie routines Mie_abcd and Mie
+
+def Mie_abcd(m, x, nmax):
+    n = arange(1,(nmax+1))*1.0
+    nu = n+0.5
+    z = m*x
+    m2 = m*m
+    sqx = sqrt(0.5 * pi / x)
+    sqz = sqrt(0.5 * pi / z)
+    bx = special.jv(nu, x) * sqx
+    bz = special.jv(nu, z) * sqz
+    yx = special.yv(nu, x) * sqx
+    hx = (complex(1,0)*bx + complex(0,1)*yx)
+    b1x = concatenate((array([(sin(x)/x)]),bx[0:(nmax-1)]))
+    b1z = concatenate((array([(sin(z)/z)]),bz[0:(nmax-1)]))
+    y1x = concatenate((array([(-cos(x)/x)]),yx[0:(nmax-1)]))
+    h1x = complex(1,0)*b1x + complex(0,1)*y1x
+    ax = x*b1x - n*bx
+    az = z*b1z - n*bz
+    ahx = x*h1x - n*hx
+    an = (m2*bz*ax - bx*az)/(m2*bz*ahx - hx*az)
+    bn = (bz*ax - bx*az)/(bz*ahx - hx*az)
+    cn = (bx*ahx - hx*ax)/(bz*ahx - hx*az)
+    dn = m*(bx*ahx - hx*ax)/(m2*bz*ahx - hx*az)
+    return (an,bn,cn,dn)
+    
+    def Mie(m, x):
+#The Mie routine adapted from Maetzler MATLAB code (Maetzler 2002).
+# check x==0 and avoid singularity
+    if x==0:
+        return(m.real, m.imag, 0., 0., 0., 0., 0.)
+    nmax = int(round(2.0+x+4.0*x**(1./3.)))
+    n1 = nmax - 1
+    n = arange(1,nmax+1)
+    cn = 2.0*n + 1.0
+    c1n = n*(n+2.0)/(n+1.0)
+    c2n = cn/n/(n+1.0)
+    x2 = x*x
+    (Mie_an,Mie_bn,Mie_cn,Mie_dn)=Mie_abcd(m, x, nmax)
+    anp = Mie_an.real
+    anpp = Mie_an.imag
+    bnp = Mie_bn.real
+    bnpp = Mie_bn.imag
+    g1=zeros((4,nmax))
+    g1[0,0:n1]=anp[1:nmax]
+    g1[1,0:n1]=anpp[1:nmax]
+    g1[2,0:n1]=bnp[1:nmax]
+    g1[3,0:n1]=bnpp[1:nmax]
+    dn = cn*(anp+bnp)
+    q = sum(dn)
+    Qext = 2*q/x2
+    en = cn*(anp*anp + anpp*anpp + bnp*bnp + bnpp*bnpp)
+    q = sum(en)
+    Qsca = 2*q/x2
+    Qabs = Qext-Qsca
+    asy1 = c1n*(anp*g1[0,:]+anpp*g1[1,:]+bnp*g1[2,:]+bnpp*g1[3,:])
+    asy2 = c2n*(anp*bnp + anpp*bnpp)
+    asy = 4.0/x2 * sum(asy1+asy2)/Qsca
+# Qb backscatter, Qratio are
+# not calculated here, contrary to original code
+# return results as a tuple
+    return (m.real,m.imag,x,Qext,Qsca,Qabs,asy)
+    
+def Mie_pt(u, nmax):
+    p=arange(0,nmax)*1.0
+    t=arange(0,nmax)*1.0
+    p[0]=1.0
+    p[1]=3.0*u
+    t[0]=u
+    t[1]=3.0*math.cos(2.0*math.acos(u))
+    nn=arange(2,nmax)
+
+    for n1 in nn:
+        p1=(2*n1-1)/(n1-1)*p[n1-1]*u
+        p2=n1/(n1-1)*p[n1-2]
+        p[n1]=p1-p2
+        t1=n1*u*p[n1]
+        t2=(n1+1)*p[n1-1]
+        t[n1]=t1-t2
+    return (p,t)
+def Mie_S12(m,x,u):
+    nmax = int(round(2.0+x+4.0*x**(1./3.)))
+
+    (an,bn,cn,dn)=Mie_abcd(m, x, nmax)
+    (p,t)= Mie_pt(u, nmax)
+    n=arange(1,nmax+1)*1.0
+    n2=(2.*n+1.)/(n*(n+1.))
+    p=p*n2
+    t=t*n2
+    S1=sum(an*p+bn*t)
+    S2=sum(an*t+bn*p)
+
+    return (S1,S2)
+def Mie_cross (m,x,lamda,mso,NA,nsteps):
+    #maximum of sita
+    sm=math.asin(NA/mso)
+    nsteps=nsteps
+    smax=pi/2+sm
+    smin=pi/2-sm
+    nx=arange(nsteps)
+    deta=2*sm/nsteps
+    sita=[]
+    k=2*pi*mso/lamda
+    diff=0
+    
+    for i in nx:
+        sita.append(smin+i*deta)
+        u=cos(sita[i])
+        (S1,S2)=Mie_S12(m,x,u)
+        s1r=S1.real
+        s1i=S1.imag
+        s2r=S2.real
+        s2i=S2.imag
+        s1a=s1r**2+s1i**2
+        s2a=s2r**2+s2i**2
+        phi=math.asin(sin(smin)/sin(sita[i]))
+        ss1=s1a*(0.5*(pi-2*phi)+0.5*sin(2*phi))
+        ss2=s2a*(0.5*(pi-2*phi)-0.5*sin(2*phi))
+        diff=sin(sita[i])/(k**2)*(ss1+ss2)*deta+diff
+      
+    return diff
+d=arange(40,1000,25)
+k=2*pi*1.333/405
+cross=[]
+cros=[]
+for i in d:
+    x=k*i/2
+    cro=Mie_cross (1.24,x,405,1.333,0.4,10)
+    cross.append(cro)
+    cr=Mie_cross (1.015,x,405,1.333,0.4,10)
+    cros.append(cr)
+    
+fig, ax = plt.subplots()
+ax.plot(d, cross)
+ax.plot(d, cros)
+ax.set_yscale('log')
